@@ -13,7 +13,7 @@ use serde::Deserialize;
 const WORK_SERVER_URL: &str = "http://90.156.225.121:3000";
 const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d0361220313d938631b12d";
 const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB (seedrecover format, 750M addresses)
-const BATCH_SIZE: usize = 10000; // Test with small batch
+const BATCH_SIZE: usize = 5000000; // 5M - оптимальный batch для GPU
 
 // Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
 const KNOWN_WORDS: [&str; 20] = [
@@ -135,23 +135,112 @@ fn build_kernel_source() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    // TEST: Минимальный kernel для диагностики
+    // Bitcoin Address Generator Kernel (скопирован из рабочего ETH kernel)
     source.push_str(r#"
 __kernel void generate_btc_addresses(
-    __global uchar *result_addresses,
-    __global uchar *result_mnemonics,
+    __global uchar *result_addresses,     // Output: 71 bytes per combo (25+25+21)
+    __global uchar *result_mnemonics,     // Output: 192 bytes per mnemonic
     const ulong start_offset,
     const uint batch_size
 ) {
     uint gid = get_global_id(0);
     if (gid >= batch_size) return;
 
-    // Просто заполняем нулями для теста
+    ulong current_offset = start_offset + gid;
+
+    // Calculate word indices (same as ETH)
+    uint last_3_bits = (uint)(current_offset % 8UL);
+    ulong temp = current_offset / 8UL;
+    uint w22_idx = (uint)(temp % 2048UL);
+    temp = temp / 2048UL;
+    uint w21_idx = (uint)(temp % 2048UL);
+    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);
+
+    // Build word indices (20 known + 3 unknown + 1 checksum)
+    uint word_indices[24];
+    word_indices[0] = 1761;   // switch
+    word_indices[1] = 1263;   // over
+    word_indices[2] = 683;    // fever
+    word_indices[3] = 709;    // flavor
+    word_indices[4] = 1431;   // real
+    word_indices[5] = 955;    // jazz
+    word_indices[6] = 1925;   // vague
+    word_indices[7] = 1734;   // sugar
+    word_indices[8] = 1802;   // throw
+    word_indices[9] = 1704;   // steak
+    word_indices[10] = 2040;  // yellow
+    word_indices[11] = 1522;  // salad
+    word_indices[12] = 424;   // crush
+    word_indices[13] = 520;   // donate
+    word_indices[14] = 1800;  // three
+    word_indices[15] = 151;   // base
+    word_indices[16] = 136;   // baby
+    word_indices[17] = 275;   // carbon
+    word_indices[18] = 379;   // control
+    word_indices[19] = 658;   // false
+    word_indices[20] = w20_idx;
+    word_indices[21] = w21_idx;
+    word_indices[22] = w22_idx;
+
+    // Calculate checksum word (same as ETH)
+    uchar entropy[32];
+    for(int i = 0; i < 32; i++) entropy[i] = 0;
+
+    uint bit_pos = 0;
+    for(int w = 0; w < 23; w++) {
+        uint word_val = word_indices[w];
+        for(int b = 10; b >= 0; b--) {
+            uint bit = (word_val >> b) & 1;
+            uint byte_idx = bit_pos / 8;
+            uint bit_idx = 7 - (bit_pos % 8);
+            if(byte_idx < 32) {
+                entropy[byte_idx] |= (bit << bit_idx);
+            }
+            bit_pos++;
+        }
+    }
+
+    entropy[31] = (entropy[31] & 0xF8) | last_3_bits;
+
+    uchar hash[32];
+    for(int i = 0; i < 32; i++) hash[i] = 0;
+    sha256_bytes(entropy, 32, hash);
+
+    uchar checksum = hash[0];
+    uint w23_idx = (last_3_bits << 8) | checksum;
+    word_indices[23] = w23_idx;
+
+    // Build mnemonic
+    uchar mnemonic[192];
+    for(int i = 0; i < 192; i++) mnemonic[i] = 0;
+
+    int pos = 0;
+    for(int w = 0; w < 24; w++) {
+        uint word_idx = word_indices[w];
+        for(int c = 0; c < 8 && words[word_idx][c] != 0; c++) {
+            mnemonic[pos++] = words[word_idx][c];
+        }
+        if(w < 23) mnemonic[pos++] = ' ';
+    }
+    uint mnemonic_len = pos;
+
+    // Convert to seed
+    uchar seed[64];
+    for(int i = 0; i < 64; i++) seed[i] = 0;
+    mnemonic_to_seed(mnemonic, mnemonic_len, seed);
+
+    // Derive Bitcoin addresses (3 types)
+    uchar all_btc_addresses[71];
+    for(int i = 0; i < 71; i++) all_btc_addresses[i] = 0;
+
+    derive_all_btc_addresses(seed, all_btc_addresses);
+
+    // Write results
     for(int i = 0; i < 71; i++) {
-        result_addresses[gid * 71 + i] = 0;
+        result_addresses[gid * 71 + i] = all_btc_addresses[i];
     }
     for(int i = 0; i < 192; i++) {
-        result_mnemonics[gid * 192 + i] = 0;
+        result_mnemonics[gid * 192 + i] = mnemonic[i];
     }
 }
 "#);
