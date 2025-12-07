@@ -135,27 +135,32 @@ fn build_kernel_source() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    // Добавляем оптимизированный kernel с BIP39 checksum validation
-    // ДЛЯ 2 НЕИЗВЕСТНЫХ СЛОВ (22, 23) - всего 2048 × 8 = 16,384 комбинаций
+    // TEST: Минимальный kernel для диагностики
     source.push_str(r#"
-// === Bitcoin Address Generator Kernel ===
-// Генерирует 3 типа Bitcoin адресов: P2PKH (1...), P2SH (3...), P2WPKH (bc1...)
-// Комбинаций: 2048 × 8 = 16,384 (checksum optimization)
-
 __kernel void generate_btc_addresses(
-    __global uchar *result_addresses,     // Output: 71 байт на комбинацию (P2PKH 25 + P2SH 25 + P2WPKH 21)
-    __global uchar *result_mnemonics,     // Output: массив мнемоник (192 bytes каждая)
-    const ulong start_offset,             // Starting offset for this batch
-    const uint batch_size                 // Количество адресов для генерации
+    __global uchar *result_addresses,
+    __global uchar *result_mnemonics,
+    const ulong start_offset,
+    const uint batch_size
 ) {
     uint gid = get_global_id(0);
+    if (gid >= batch_size) return;
 
-    if (gid >= batch_size) {
-        return;
+    // Просто заполняем нулями для теста
+    for(int i = 0; i < 71; i++) {
+        result_addresses[gid * 71 + i] = 0;
     }
+    for(int i = 0; i < 192; i++) {
+        result_mnemonics[gid * 192 + i] = 0;
+    }
+}
+"#);
 
-    ulong current_offset = start_offset + gid;
+    Ok(source)
+}
 
+// ORIGINAL KERNEL CODE - закомментирован для диагностики
+/*
     // Для 4 неизвестных слов: 2048^3 × 8 = 68,719,476,736 комбинаций
     // - Слово 20 (21-е): 2048 вариантов (11 бит)
     // - Слово 21 (22-е): 2048 вариантов (11 бит)
@@ -265,12 +270,8 @@ __kernel void generate_btc_addresses(
     // Copy mnemonic to output
     for(int i = 0; i < 192; i++) {
         result_mnemonics[gid * 192 + i] = mnemonic[i];
-    }
 }
-"#);
-
-    Ok(source)
-}
+*/
 
 // === GPU Worker ===
 
@@ -279,6 +280,7 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📚 Компиляция OpenCL kernel...");
     let kernel_source = build_kernel_source()?;
+    println!("   Kernel source: {} KB", kernel_source.len() / 1024);
 
     use ocl::{Platform, Device, DeviceType};
 
@@ -366,18 +368,13 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .local_work_size(local_work_size)
                 .build()?;
 
-            unsafe {
-                kernel.enq()?;
-            }
-
-            // Ждём завершения kernel
-            result_addresses.default_queue().unwrap().finish()?;
+            unsafe { kernel.enq()?; }
+            pro_que.queue().finish()?;
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
-            let mut mnemonics_data = vec![0u8; chunk_size as usize * 192];
-
-            // Чтение буферов
             result_addresses.read(&mut addresses_bytes).enq()?;
+
+            let mut mnemonics_data = vec![0u8; chunk_size as usize * 192];
             result_mnemonics.read(&mut mnemonics_data).enq()?;
 
             // CPU lookup с Base58/Bech32 декодированием
