@@ -15,13 +15,12 @@ const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d036
 const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB (seedrecover format, 750M addresses)
 const BATCH_SIZE: usize = 5000000; // 5M - максимальный batch для GPU
 
-// Известные 21 слово (3 неизвестных: позиции 21, 22, 23)
-const KNOWN_WORDS: [&str; 21] = [
-    "protect", "arctic", "pudding", "cabbage", "fiction",
-    "hub", "extend", "board", "yard", "december",
-    "service", "drip", "suffer", "fox", "error",
-    "note", "mother", "online", "shield", "stomach",
-    "engage"
+// Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
+const KNOWN_WORDS: [&str; 20] = [
+    "switch", "over", "fever", "flavor", "real",
+    "jazz", "vague", "sugar", "throw", "steak",
+    "yellow", "salad", "crush", "donate", "three",
+    "base", "baby", "carbon", "control", "false"
 ];
 
 // === API структуры для работы с сервером ===
@@ -157,7 +156,8 @@ __kernel void generate_btc_addresses(
 
     ulong current_offset = start_offset + gid;
 
-    // Для 3 неизвестных слов: 2048^2 × 8 = 33,554,432 комбинаций
+    // Для 4 неизвестных слов: 2048^3 × 8 = 68,719,476,736 комбинаций
+    // - Слово 20 (21-е): 2048 вариантов (11 бит)
     // - Слово 21 (22-е): 2048 вариантов (11 бит)
     // - Слово 22 (23-е): 2048 вариантов (11 бит)
     // - Слово 23 (24-е): вычисляется из checksum (8 бит checksum + 3 бита энтропии = 8 вариантов)
@@ -165,33 +165,35 @@ __kernel void generate_btc_addresses(
     uint last_3_bits = (uint)(current_offset % 8UL);                      // 0-7
     ulong temp = current_offset / 8UL;
     uint w22_idx = (uint)(temp % 2048UL);                                 // word 22 (23-е слово, 0-2047)
-    uint w21_idx = (uint)((temp / 2048UL) % 2048UL);                      // word 21 (22-е слово, 0-2047)
+    temp = temp / 2048UL;
+    uint w21_idx = (uint)(temp % 2048UL);                                 // word 21 (22-е слово, 0-2047)
+    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);                      // word 20 (21-е слово, 0-2047)
 
     // Build array of all 24 word indices
-    // 21 известное слово (hardcoded indices from english.txt, 0-based)
-    // Seed: protect arctic pudding cabbage fiction hub extend board yard december service drip suffer fox error note mother online shield stomach engage ??? ??? ???
+    // 20 известных слов (hardcoded indices from english.txt, 0-based)
+    // Seed: switch over fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
     uint word_indices[24];
-    word_indices[0] = 1381;   // protect
-    word_indices[1] = 89;     // arctic
-    word_indices[2] = 1385;   // pudding
-    word_indices[3] = 253;    // cabbage
-    word_indices[4] = 686;    // fiction
-    word_indices[5] = 884;    // hub
-    word_indices[6] = 647;    // extend
-    word_indices[7] = 197;    // board
-    word_indices[8] = 2038;   // yard
-    word_indices[9] = 453;    // december
-    word_indices[10] = 1569;  // service
-    word_indices[11] = 537;   // drip
-    word_indices[12] = 1733;  // suffer
-    word_indices[13] = 738;   // fox
-    word_indices[14] = 614;   // error
-    word_indices[15] = 1205;  // note
-    word_indices[16] = 1153;  // mother
-    word_indices[17] = 1239;  // online
-    word_indices[18] = 1581;  // shield
-    word_indices[19] = 1713;  // stomach
-    word_indices[20] = 594;   // engage
+    word_indices[0] = 1761;   // switch
+    word_indices[1] = 1263;   // over
+    word_indices[2] = 683;    // fever
+    word_indices[3] = 709;    // flavor
+    word_indices[4] = 1431;   // real
+    word_indices[5] = 955;    // jazz
+    word_indices[6] = 1925;   // vague
+    word_indices[7] = 1734;   // sugar
+    word_indices[8] = 1802;   // throw
+    word_indices[9] = 1704;   // steak
+    word_indices[10] = 2040;  // yellow
+    word_indices[11] = 1522;  // salad
+    word_indices[12] = 424;   // crush
+    word_indices[13] = 520;   // donate
+    word_indices[14] = 1800;  // three
+    word_indices[15] = 151;   // base
+    word_indices[16] = 136;   // baby
+    word_indices[17] = 275;   // carbon
+    word_indices[18] = 379;   // control
+    word_indices[19] = 658;   // false
+    word_indices[20] = w20_idx;  // UNKNOWN word 20 (21-е слово) - перебираем
     word_indices[21] = w21_idx;  // UNKNOWN word 21 (22-е слово) - перебираем
     word_indices[22] = w22_idx;  // UNKNOWN word 22 (23-е слово) - перебираем
 
@@ -448,9 +450,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Bitcoin BIP39 Recovery - GPU Worker ===\n");
 
     println!("Задача: 24-словная BIP39 мнемоника для Bitcoin");
-    println!("  Известно: первые 21 слово");
-    println!("  Неизвестно: последние 3 слова (позиции 21-23)");
-    println!("  Checksum оптимизация: 2048² x 8 = 33,554,432 комбинаций\n");
+    println!("  Известно: первые 20 слов");
+    println!("  Неизвестно: последние 4 слова (позиции 20-23)");
+    println!("  Checksum оптимизация: 2048³ x 8 = 68,719,476,736 комбинаций\n");
 
     println!("Известные слова:");
     for (i, word) in KNOWN_WORDS.iter().enumerate() {
@@ -459,7 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!();
         }
     }
-    println!("\n  21-23: ???\n");
+    println!("\n  20-23: ???\n");
 
     println!("📦 Загрузка базы данных в RAM...");
     let mut db = Database::load(DATABASE_PATH)?;

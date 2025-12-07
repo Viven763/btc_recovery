@@ -3,23 +3,46 @@
 # ИЗМЕНИТЕ ПЕРЕМЕННЫЕ НИЖЕ!
 
 ORCH="http://90.156.225.121:3000"
-SECRET="YOUR_SECRET_KEY"
-DB_URL="https://cryptoguide.tips/btcrecover-addressdbs/eth20240925.zip"
-REPO=""  # Оставьте пустым или укажите GitHub URL
+SECRET="15a172308d70dede515f9eecc78eaea9345b419581d0361220313d938631b12d"
+DB_URL="https://cryptoguide.tips/btcrecover-addressdbs/btc-20200101-to-20250201.zip"
+REPO="https://github.com/Viven763/btc_recovery.git"  # Ваш GitHub репозиторий
 
 # === НЕ ИЗМЕНЯЙТЕ КОД НИЖЕ ===
 set -e
+echo "📦 Установка зависимостей..."
 apt-get update -qq && apt-get install -y -qq curl wget git build-essential pkg-config libssl-dev ocl-icd-opencl-dev clinfo unzip > /dev/null 2>&1
+
+echo "🦀 Установка Rust..."
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source $HOME/.cargo/env
+
+echo "📥 Клонирование репозитория..."
 mkdir -p /workspace && cd /workspace
-if [ -n "$REPO" ]; then git clone "$REPO" eth_recovery; else echo "No repo"; fi
-cd eth_recovery 2>/dev/null || exit 1
-if [ ! -f eth20240925 ]; then
-    wget -q --show-progress "$DB_URL" -O eth20240925.zip
-    unzip -q eth20240925.zip
-    rm eth20240925.zip
+if [ -n "$REPO" ]; then
+    git clone "$REPO" btc_recovery
+else
+    echo "❌ REPO не указан!"
+    exit 1
 fi
+
+cd btc_recovery || exit 1
+
+echo "💾 Скачивание БД (8GB)..."
+if [ ! -f btc-20200101-to-20250201.db ]; then
+    wget -q --show-progress "$DB_URL" -O btc-20200101-to-20250201.zip
+    unzip -q btc-20200101-to-20250201.zip
+    rm btc-20200101-to-20250201.zip
+fi
+
+echo "🔧 Компиляция (release mode)..."
 cargo build --release
-export WORK_SERVER_URL="$ORCH" WORK_SERVER_SECRET="$SECRET" DATABASE_PATH="/workspace/eth_recovery/eth20240925"
-./target/release/eth_recovery 2>&1 | tee worker.log
+
+echo "✅ GPU информация:"
+clinfo | grep -E "Device Name|Device Type" || true
+
+echo "🚀 Запуск worker..."
+export WORK_SERVER_URL="$ORCH"
+export WORK_SERVER_SECRET="$SECRET"
+export DATABASE_PATH="/workspace/btc_recovery/btc-20200101-to-20250201.db"
+
+./target/release/btc_recovery 2>&1 | tee worker.log
