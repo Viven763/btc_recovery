@@ -358,11 +358,23 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .arg(chunk_size as u32)
                 .global_work_size(global_work_size)
                 .local_work_size(local_work_size)
-                .queue(pro_que.queue().clone())
                 .build()?;
 
-            unsafe { kernel.enq()?; }
-            pro_que.queue().finish()?;
+            match unsafe { kernel.enq() } {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("❌ Ошибка при выполнении kernel: {:?}", e);
+                    return Err(Box::new(e));
+                }
+            }
+
+            match pro_que.queue().finish() {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("❌ Ошибка при finish queue: {:?}", e);
+                    return Err(Box::new(e));
+                }
+            }
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
             result_addresses.read(&mut addresses_bytes).enq()?;
