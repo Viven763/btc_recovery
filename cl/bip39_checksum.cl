@@ -29,7 +29,7 @@ uint calculate_last_word_with_checksum(
     // yellow=2037, salad=1525, crush=412, donate=522, three=1768,
     // base=136, baby=123, carbon=265, control=387, false=636
 
-    __constant const uint known_indices[20] = {
+    const uint known_indices[20] = {
         1831, 1291, 649, 655, 1424,
         935, 1897, 1701, 1771, 1673,
         2037, 1525, 412, 522, 1768,
