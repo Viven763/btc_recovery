@@ -366,10 +366,9 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
             let mut mnemonics_data = vec![0u8; chunk_size as usize * 192];
 
-            // Блокирующее чтение буферов
+            // Чтение буферов
             result_addresses.read(&mut addresses_bytes).enq()?;
             result_mnemonics.read(&mut mnemonics_data).enq()?;
-            pro_que.queue().finish()?;
 
             // CPU lookup с Base58/Bech32 декодированием
             use bech32::{ToBase32, Variant};
