@@ -360,8 +360,12 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .local_work_size(local_work_size)
                 .build()?;
 
-            unsafe { kernel.enq()?; }
-            pro_que.queue().finish()?;
+            unsafe {
+                kernel.enq()?;
+            }
+
+            // Wait for kernel completion on the same queue
+            result_addresses.default_queue().unwrap().finish()?;
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
             result_addresses.read(&mut addresses_bytes).enq()?;
