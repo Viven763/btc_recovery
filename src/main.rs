@@ -13,7 +13,7 @@ use serde::Deserialize;
 const WORK_SERVER_URL: &str = "http://90.156.225.121:3000";
 const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d0361220313d938631b12d";
 const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB (seedrecover format, 750M addresses)
-const BATCH_SIZE: usize = 5000000; // 5M - максимальный batch для GPU
+const BATCH_SIZE: usize = 1000000; // 5M - максимальный batch для GPU
 
 // Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
 const KNOWN_WORDS: [&str; 20] = [
