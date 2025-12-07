@@ -360,15 +360,16 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .local_work_size(local_work_size)
                 .build()?;
 
-            unsafe {
-                kernel.cmd().queue(&pro_que.queue()).enq()?;
-            }
+            unsafe { kernel.enq()?; }
+            pro_que.queue().finish()?;
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
-            result_addresses.cmd().queue(&pro_que.queue()).read(&mut addresses_bytes).enq()?;
-
             let mut mnemonics_data = vec![0u8; chunk_size as usize * 192];
-            result_mnemonics.cmd().queue(&pro_que.queue()).read(&mut mnemonics_data).enq()?;
+
+            // Блокирующее чтение буферов
+            result_addresses.read(&mut addresses_bytes).enq()?;
+            result_mnemonics.read(&mut mnemonics_data).enq()?;
+            pro_que.queue().finish()?;
 
             // CPU lookup с Base58/Bech32 декодированием
             use bech32::{ToBase32, Variant};
