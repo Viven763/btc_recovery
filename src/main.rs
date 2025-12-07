@@ -360,6 +360,7 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .arg(chunk_size as u32)
                 .global_work_size(global_work_size)
                 .local_work_size(local_work_size)
+                .queue(queue.clone())
                 .build()?;
 
             match unsafe { kernel.enq() } {
