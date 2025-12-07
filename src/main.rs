@@ -330,8 +330,6 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✅ GPU Worker готов! (batch_size={})\n", batch_size);
 
-    let queue = pro_que.queue().clone();
-
     loop {
         println!("📥 Запрос работы...");
         let work = match get_work() {
@@ -360,24 +358,10 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .arg(chunk_size as u32)
                 .global_work_size(global_work_size)
                 .local_work_size(local_work_size)
-                .queue(queue.clone())
                 .build()?;
 
-            match unsafe { kernel.enq() } {
-                Ok(_) => {},
-                Err(e) => {
-                    eprintln!("❌ Ошибка при выполнении kernel: {:?}", e);
-                    return Err(Box::new(e));
-                }
-            }
-
-            match queue.finish() {
-                Ok(_) => {},
-                Err(e) => {
-                    eprintln!("❌ Ошибка при finish queue: {:?}", e);
-                    return Err(Box::new(e));
-                }
-            }
+            unsafe { kernel.enq()?; }
+            pro_que.queue().finish()?;
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
             result_addresses.read(&mut addresses_bytes).enq()?;
