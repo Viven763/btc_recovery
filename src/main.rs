@@ -330,6 +330,8 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✅ GPU Worker готов! (batch_size={})\n", batch_size);
 
+    let queue = pro_que.queue().clone();
+
     loop {
         println!("📥 Запрос работы...");
         let work = match get_work() {
@@ -368,7 +370,7 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            match pro_que.queue().finish() {
+            match queue.finish() {
                 Ok(_) => {},
                 Err(e) => {
                     eprintln!("❌ Ошибка при finish queue: {:?}", e);
