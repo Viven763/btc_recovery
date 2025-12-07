@@ -13,7 +13,7 @@ use serde::Deserialize;
 const WORK_SERVER_URL: &str = "http://90.156.225.121:3000";
 const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d0361220313d938631b12d";
 const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB (seedrecover format, 750M addresses)
-const BATCH_SIZE: usize = 1000000; // 5M - максимальный batch для GPU
+const BATCH_SIZE: usize = 10000; // Test with small batch
 
 // Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
 const KNOWN_WORDS: [&str; 20] = [
@@ -301,12 +301,18 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
     println!("   Device: {}", device.name()?);
     println!("   Type: GPU");
 
-    let pro_que = ProQue::builder()
+    let pro_que = match ProQue::builder()
         .src(&kernel_source)
         .dims(1)
         .platform(platform)
         .device(device)
-        .build()?;
+        .build() {
+            Ok(pq) => pq,
+            Err(e) => {
+                eprintln!("❌ Ошибка компиляции OpenCL kernel: {}", e);
+                return Err(e.into());
+            }
+        };
 
     println!("✅ OpenCL: {}", pro_que.device().name()?);
     println!("   Max work group size: {}", pro_que.device().max_wg_size()?);
@@ -360,8 +366,12 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
                 .local_work_size(local_work_size)
                 .build()?;
 
-            unsafe { kernel.enq()?; }
-            pro_que.queue().finish()?;
+            unsafe {
+                kernel.enq()?;
+            }
+
+            // Ждём завершения kernel
+            result_addresses.default_queue().unwrap().finish()?;
 
             let mut addresses_bytes = vec![0u8; chunk_size as usize * 71];
             let mut mnemonics_data = vec![0u8; chunk_size as usize * 192];
