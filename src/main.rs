@@ -16,10 +16,10 @@ const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB
 const BATCH_SIZE: usize = 5000000; // 1M per GPU batch
 
 // Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
-// Seed: switch over fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
+// Seed: switch oven fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
 // Total combinations: 2048³ × 8 = 68,719,476,736
 const KNOWN_WORDS: [&str; 20] = [
-    "switch", "over", "fever", "flavor", "real",
+    "switch", "oven", "fever", "flavor", "real",
     "jazz", "vague", "sugar", "throw", "steak",
     "yellow", "salad", "crush", "donate", "three",
     "base", "baby", "carbon", "control", "false"
@@ -166,11 +166,11 @@ __kernel void generate_btc_addresses(
     uint w20_idx = (uint)((temp / 2048UL) % 2048UL);   // 0-2047
 
     // Build word indices (20 known + 3 unknown + 1 checksum)
-    // Seed: switch over fever flavor real jazz vague sugar throw steak
+    // Seed: switch oven fever flavor real jazz vague sugar throw steak
     //       yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
     uint word_indices[24];
     word_indices[0] = 1761;   // switch
-    word_indices[1] = 1263;   // over
+    word_indices[1] = 1261;   // oven
     word_indices[2] = 683;    // fever
     word_indices[3] = 709;    // flavor
     word_indices[4] = 1431;   // real
