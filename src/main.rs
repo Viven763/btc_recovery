@@ -170,7 +170,7 @@ __kernel void generate_btc_addresses(
     //       yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
     uint word_indices[24];
     word_indices[0] = 1761;   // switch
-    word_indices[1] = 1261;   // oven
+    word_indices[1] = 1262;   // oven
     word_indices[2] = 683;    // fever
     word_indices[3] = 709;    // flavor
     word_indices[4] = 1431;   // real
