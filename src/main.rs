@@ -12,12 +12,14 @@ use serde::Deserialize;
 // === Конфигурация ===
 const WORK_SERVER_URL: &str = "http://90.156.225.121:3000";
 const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d0361220313d938631b12d";
-const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB (seedrecover format, 750M addresses)
-const BATCH_SIZE: usize = 5000000; // 5M - оптимальный batch для GPU
+const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB
+const BATCH_SIZE: usize = 1000000; // 1M per GPU batch
 
 // Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
+// Seed: switch oven fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
+// Total combinations: 2048³ × 8 = 68,719,476,736
 const KNOWN_WORDS: [&str; 20] = [
-    "switch", "over", "fever", "flavor", "real",
+    "switch", "oven", "fever", "flavor", "real",
     "jazz", "vague", "sugar", "throw", "steak",
     "yellow", "salad", "crush", "donate", "three",
     "base", "baby", "carbon", "control", "false"
@@ -135,7 +137,8 @@ fn build_kernel_source() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    // Bitcoin Address Generator Kernel (скопирован из рабочего ETH kernel)
+    // Bitcoin Address Generator Kernel for 21 known words + 3 unknown
+    // Total combinations: 2048 × 2048 × 8 = 33,554,432
     source.push_str(r#"
 __kernel void generate_btc_addresses(
     __global uchar *result_addresses,     // Output: 71 bytes per combo (25+25+21)
@@ -148,18 +151,26 @@ __kernel void generate_btc_addresses(
 
     ulong current_offset = start_offset + gid;
 
-    // Calculate word indices (same as ETH)
-    uint last_3_bits = (uint)(current_offset % 8UL);
+    // For 4 unknown words (positions 20, 21, 22 and 23):
+    // - Word 20: 2048 variants (11 bits)
+    // - Word 21: 2048 variants (11 bits)
+    // - Word 22: 2048 variants (11 bits)
+    // - Word 23: calculated from checksum (3 bits entropy + 8 bits checksum)
+    // Total: 2048³ × 8 = 68,719,476,736 combinations
+
+    uint last_3_bits = (uint)(current_offset % 8UL);   // 0-7
     ulong temp = current_offset / 8UL;
-    uint w22_idx = (uint)(temp % 2048UL);
+    uint w22_idx = (uint)(temp % 2048UL);              // 0-2047
     temp = temp / 2048UL;
-    uint w21_idx = (uint)(temp % 2048UL);
-    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);
+    uint w21_idx = (uint)(temp % 2048UL);              // 0-2047
+    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);   // 0-2047
 
     // Build word indices (20 known + 3 unknown + 1 checksum)
+    // Seed: switch oven fever flavor real jazz vague sugar throw steak
+    //       yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
     uint word_indices[24];
     word_indices[0] = 1761;   // switch
-    word_indices[1] = 1263;   // over
+    word_indices[1] = 1262;   // oven
     word_indices[2] = 683;    // fever
     word_indices[3] = 709;    // flavor
     word_indices[4] = 1431;   // real
@@ -178,11 +189,12 @@ __kernel void generate_btc_addresses(
     word_indices[17] = 275;   // carbon
     word_indices[18] = 379;   // control
     word_indices[19] = 658;   // false
-    word_indices[20] = w20_idx;
-    word_indices[21] = w21_idx;
-    word_indices[22] = w22_idx;
+    word_indices[20] = w20_idx;  // UNKNOWN - iterate
+    word_indices[21] = w21_idx;  // UNKNOWN - iterate
+    word_indices[22] = w22_idx;  // UNKNOWN - iterate
 
-    // Calculate checksum word (same as ETH)
+    // Calculate checksum word (word 23)
+    // Pack 253 bits from first 23 words
     uchar entropy[32];
     for(int i = 0; i < 32; i++) entropy[i] = 0;
 
@@ -200,17 +212,22 @@ __kernel void generate_btc_addresses(
         }
     }
 
+    // Add last 3 bits to complete 256 bits of entropy
     entropy[31] = (entropy[31] & 0xF8) | last_3_bits;
 
+    // SHA256 of entropy to get checksum
     uchar hash[32];
     for(int i = 0; i < 32; i++) hash[i] = 0;
     sha256_bytes(entropy, 32, hash);
 
+    // Checksum = first 8 bits of hash
     uchar checksum = hash[0];
+    
+    // Word 23 = (last_3_bits << 8) | checksum
     uint w23_idx = (last_3_bits << 8) | checksum;
     word_indices[23] = w23_idx;
 
-    // Build mnemonic
+    // Build mnemonic string
     uchar mnemonic[192];
     for(int i = 0; i < 192; i++) mnemonic[i] = 0;
 
@@ -224,21 +241,79 @@ __kernel void generate_btc_addresses(
     }
     uint mnemonic_len = pos;
 
-    // Convert to seed
+    // Convert mnemonic to seed
     uchar seed[64];
     for(int i = 0; i < 64; i++) seed[i] = 0;
     mnemonic_to_seed(mnemonic, mnemonic_len, seed);
 
-    // Derive Bitcoin addresses (3 types)
-    uchar all_btc_addresses[71];
-    for(int i = 0; i < 71; i++) all_btc_addresses[i] = 0;
+    // === INLINE BTC ADDRESS DERIVATION ===
+    // Using reusable variables to minimize GPU memory
+    extended_private_key_t master;
+    extended_private_key_t child1;
+    extended_private_key_t child2;
+    extended_public_key_t pub;
+    
+    new_master_from_seed(BITCOIN_MAINNET, seed, &master);
 
-    derive_all_btc_addresses(seed, all_btc_addresses);
+    // === 1. P2PKH (Legacy) - BIP44: m/44'/0'/0'/0/0 ===
+    hardened_private_child_from_private(&master, &child1, 44);
+    hardened_private_child_from_private(&child1, &child2, 0);
+    hardened_private_child_from_private(&child2, &child1, 0);
+    normal_private_child_from_private(&child1, &child2, 0);
+    normal_private_child_from_private(&child2, &child1, 0);
+    public_from_private(&child1, &pub);
+    
+    // Get hash160 for P2PKH
+    uchar pubkey_hash[20];
+    identifier_for_public_key(&pub, pubkey_hash);
+    
+    // Write P2PKH address (version 0x00 + hash160 + checksum)
+    result_addresses[gid * 71 + 0] = 0x00;
+    for(int i = 0; i < 20; i++) result_addresses[gid * 71 + 1 + i] = pubkey_hash[i];
+    uchar addr_data[21];
+    addr_data[0] = 0x00;
+    for(int i = 0; i < 20; i++) addr_data[i+1] = pubkey_hash[i];
+    uchar addr_checksum[32];
+    sha256d(addr_data, 21, addr_checksum);
+    for(int i = 0; i < 4; i++) result_addresses[gid * 71 + 21 + i] = addr_checksum[i];
 
-    // Write results
-    for(int i = 0; i < 71; i++) {
-        result_addresses[gid * 71 + i] = all_btc_addresses[i];
-    }
+    // === 2. P2SH-P2WPKH (SegWit) - BIP49: m/49'/0'/0'/0/0 ===
+    hardened_private_child_from_private(&master, &child1, 49);
+    hardened_private_child_from_private(&child1, &child2, 0);
+    hardened_private_child_from_private(&child2, &child1, 0);
+    normal_private_child_from_private(&child1, &child2, 0);
+    normal_private_child_from_private(&child2, &child1, 0);
+    public_from_private(&child1, &pub);
+    identifier_for_public_key(&pub, pubkey_hash);
+    
+    // P2SH script: OP_0 <20-byte-hash>
+    uchar script[22];
+    script[0] = 0x00;
+    script[1] = 0x14;
+    for(int i = 0; i < 20; i++) script[i+2] = pubkey_hash[i];
+    uchar script_hash[20];
+    hash160(script, 22, script_hash);
+    
+    result_addresses[gid * 71 + 25] = 0x05;
+    for(int i = 0; i < 20; i++) result_addresses[gid * 71 + 26 + i] = script_hash[i];
+    addr_data[0] = 0x05;
+    for(int i = 0; i < 20; i++) addr_data[i+1] = script_hash[i];
+    sha256d(addr_data, 21, addr_checksum);
+    for(int i = 0; i < 4; i++) result_addresses[gid * 71 + 46 + i] = addr_checksum[i];
+
+    // === 3. P2WPKH (Native SegWit) - BIP84: m/84'/0'/0'/0/0 ===
+    hardened_private_child_from_private(&master, &child1, 84);
+    hardened_private_child_from_private(&child1, &child2, 0);
+    hardened_private_child_from_private(&child2, &child1, 0);
+    normal_private_child_from_private(&child1, &child2, 0);
+    normal_private_child_from_private(&child2, &child1, 0);
+    public_from_private(&child1, &pub);
+    identifier_for_public_key(&pub, pubkey_hash);
+    
+    result_addresses[gid * 71 + 50] = 0x00;
+    for(int i = 0; i < 20; i++) result_addresses[gid * 71 + 51 + i] = pubkey_hash[i];
+
+    // Write mnemonic
     for(int i = 0; i < 192; i++) {
         result_mnemonics[gid * 192 + i] = mnemonic[i];
     }
@@ -248,123 +323,7 @@ __kernel void generate_btc_addresses(
     Ok(source)
 }
 
-// ORIGINAL KERNEL CODE - закомментирован для диагностики
-/*
-    // Для 4 неизвестных слов: 2048^3 × 8 = 68,719,476,736 комбинаций
-    // - Слово 20 (21-е): 2048 вариантов (11 бит)
-    // - Слово 21 (22-е): 2048 вариантов (11 бит)
-    // - Слово 22 (23-е): 2048 вариантов (11 бит)
-    // - Слово 23 (24-е): вычисляется из checksum (8 бит checksum + 3 бита энтропии = 8 вариантов)
-
-    uint last_3_bits = (uint)(current_offset % 8UL);                      // 0-7
-    ulong temp = current_offset / 8UL;
-    uint w22_idx = (uint)(temp % 2048UL);                                 // word 22 (23-е слово, 0-2047)
-    temp = temp / 2048UL;
-    uint w21_idx = (uint)(temp % 2048UL);                                 // word 21 (22-е слово, 0-2047)
-    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);                      // word 20 (21-е слово, 0-2047)
-
-    // Build array of all 24 word indices
-    // 20 известных слов (hardcoded indices from english.txt, 0-based)
-    // Seed: switch over fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
-    uint word_indices[24];
-    word_indices[0] = 1761;   // switch
-    word_indices[1] = 1263;   // over
-    word_indices[2] = 683;    // fever
-    word_indices[3] = 709;    // flavor
-    word_indices[4] = 1431;   // real
-    word_indices[5] = 955;    // jazz
-    word_indices[6] = 1925;   // vague
-    word_indices[7] = 1734;   // sugar
-    word_indices[8] = 1802;   // throw
-    word_indices[9] = 1704;   // steak
-    word_indices[10] = 2040;  // yellow
-    word_indices[11] = 1522;  // salad
-    word_indices[12] = 424;   // crush
-    word_indices[13] = 520;   // donate
-    word_indices[14] = 1800;  // three
-    word_indices[15] = 151;   // base
-    word_indices[16] = 136;   // baby
-    word_indices[17] = 275;   // carbon
-    word_indices[18] = 379;   // control
-    word_indices[19] = 658;   // false
-    word_indices[20] = w20_idx;  // UNKNOWN word 20 (21-е слово) - перебираем
-    word_indices[21] = w21_idx;  // UNKNOWN word 21 (22-е слово) - перебираем
-    word_indices[22] = w22_idx;  // UNKNOWN word 22 (23-е слово) - перебираем
-
-    // Calculate word 23 with valid BIP39 checksum
-    // Pack 253 bits (from 23 words * 11 = 253 bits)
-    uchar entropy[32];
-    for(int i = 0; i < 32; i++) entropy[i] = 0;
-
-    uint bit_pos = 0;
-    for(int w = 0; w < 23; w++) {
-        uint word_val = word_indices[w];
-        for(int b = 10; b >= 0; b--) {
-            uint bit = (word_val >> b) & 1;
-            uint byte_idx = bit_pos / 8;
-            uint bit_idx = 7 - (bit_pos % 8);
-            if(byte_idx < 32) {
-                entropy[byte_idx] |= (bit << bit_idx);
-            }
-            bit_pos++;
-        }
-    }
-
-    // Add last 3 bits (bits 253-255) to complete 256 bits of entropy
-    entropy[31] = (entropy[31] & 0xF8) | last_3_bits;
-
-    // Calculate SHA256 of 256-bit entropy
-    uchar hash[32];
-    for(int i = 0; i < 32; i++) hash[i] = 0;
-    sha256_bytes(entropy, 32, hash);
-
-    // Checksum = first 8 bits of hash
-    uchar checksum = hash[0];
-
-    // Last word (24th) = (last_3_bits << 8) | checksum
-    uint w23_idx = (last_3_bits << 8) | checksum;
-    word_indices[23] = w23_idx;
-
-    // Build mnemonic string
-    uchar mnemonic[192];
-    for(int i = 0; i < 192; i++) mnemonic[i] = 0;
-
-    int pos = 0;
-    for(int w = 0; w < 24; w++) {
-        uint word_idx = word_indices[w];
-        for(int c = 0; c < 8 && words[word_idx][c] != '\0'; c++) {
-            mnemonic[pos++] = words[word_idx][c];
-        }
-        if(w < 23) mnemonic[pos++] = ' ';
-    }
-    uint mnemonic_len = pos;  // Actual length!
-
-    // Convert mnemonic to seed
-    uchar seed[64];
-    for(int i = 0; i < 64; i++) seed[i] = 0;
-    mnemonic_to_seed(mnemonic, mnemonic_len, seed);
-
-    // Derive all 3 Bitcoin address types
-    // P2PKH (m/44'/0'/0'/0/0), P2SH (m/49'/0'/0'/0/0), P2WPKH (m/84'/0'/0'/0/0)
-    uchar all_btc_addresses[71];  // 25 + 25 + 21 bytes
-    for(int i = 0; i < 71; i++) all_btc_addresses[i] = 0;
-
-    derive_all_btc_addresses(seed, all_btc_addresses);
-
-    // Write results (71 bytes per address set)
-    for(int i = 0; i < 71; i++) {
-        result_addresses[gid * 71 + i] = all_btc_addresses[i];
-    }
-
-    // Copy mnemonic to output
-    for(int i = 0; i < 192; i++) {
-        result_mnemonics[gid * 192 + i] = mnemonic[i];
-}
-*/
-
-// === GPU Worker ===
-
-fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
+fn run_gpu_worker(db: &Database) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🚀 Запуск GPU Worker...\n");
 
     println!("📚 Компиляция OpenCL kernel...");
@@ -392,6 +351,10 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
     println!("   Device: {}", device.name()?);
     println!("   Type: GPU");
 
+    // Save kernel source for debugging
+    std::fs::write("kernel_debug.cl", &kernel_source).ok();
+    println!("   Kernel saved to kernel_debug.cl");
+
     let pro_que = match ProQue::builder()
         .src(&kernel_source)
         .dims(1)
@@ -408,7 +371,7 @@ fn run_gpu_worker(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ OpenCL: {}", pro_que.device().name()?);
     println!("   Max work group size: {}", pro_que.device().max_wg_size()?);
 
-    println!("\n💾 БД на диске (CPU lookup)");
+    println!("\n💾 БД в RAM (binary search lookup)");
     let stats = db.stats();
     println!("   Записей: {}", stats.filled_records);
     println!("   Размер: {} MB\n", stats.size_mb);
@@ -553,7 +516,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Известные слова:");
     for (i, word) in KNOWN_WORDS.iter().enumerate() {
-        print!("  {:2}: {:<8}", i, word);
+        print!("  {:2}: {:<10}", i, word);
         if (i + 1) % 5 == 0 {
             println!();
         }
@@ -561,7 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  20-23: ???\n");
 
     println!("📦 Загрузка базы данных в RAM...");
-    let mut db = Database::load(DATABASE_PATH)?;
+    let db = Database::load(DATABASE_PATH)?;
     let stats = db.stats();
 
     println!("✅ База данных загружена:");
@@ -580,7 +543,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    run_gpu_worker(&mut db)?;
+    run_gpu_worker(&db)?;
 
     Ok(())
 }

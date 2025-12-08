@@ -3,7 +3,7 @@
 
 // Bitcoin P2PKH address generation (Legacy addresses starting with '1')
 // Format: version (0x00) + hash160(pubkey) + checksum (4 bytes)
-void p2pkh_address_for_public_key(extended_public_key_t *pub, uchar *address_bytes) {
+void p2pkh_address_for_public_key(extended_public_key_t *pub, __generic uchar *address_bytes) {
     // 1. Get public key hash (hash160 = RIPEMD160(SHA256(pubkey)))
     uchar pubkey_hash[20] = {0};
     identifier_for_public_key(pub, pubkey_hash);
@@ -36,7 +36,7 @@ void p2pkh_address_for_public_key(extended_public_key_t *pub, uchar *address_byt
 
 // Bitcoin Native SegWit (Bech32) address generation (addresses starting with 'bc1')
 // Format: witness version (0x00) + hash160(pubkey) - NO checksum here (Bech32 has own checksum)
-void p2wpkh_address_for_public_key(extended_public_key_t *pub, uchar *witness_program) {
+void p2wpkh_address_for_public_key(extended_public_key_t *pub, __generic uchar *witness_program) {
     // Native SegWit witness program is just hash160 of pubkey
     // Format: version (1 byte) + hash160 (20 bytes) = 21 bytes
     // Bech32 encoding is done on CPU side
@@ -58,76 +58,46 @@ void p2wpkh_address_for_public_key(extended_public_key_t *pub, uchar *witness_pr
 
 // Derive all 3 Bitcoin address types from BIP44/49/84 paths
 // Output format: p2pkh (25 bytes) + p2sh (25 bytes) + p2wpkh (21 bytes) = 71 bytes total
-void derive_all_btc_addresses(uchar *seed, uchar *all_addresses) {
+// OPTIMIZED: Reuse variables to reduce GPU local memory usage
+void derive_all_btc_addresses(__generic uchar *seed, __generic uchar *all_addresses) {
+    // Reusable key variables to minimize GPU memory usage
     extended_private_key_t master;
+    extended_private_key_t child1;
+    extended_private_key_t child2;
+    extended_public_key_t pub;
+
     new_master_from_seed(BITCOIN_MAINNET, seed, &master);
 
     // === 1. P2PKH (Legacy, starts with '1') - BIP44: m/44'/0'/0'/0/0 ===
-    extended_private_key_t purpose_44;
-    hardened_private_child_from_private(&master, &purpose_44, 44);
-
-    extended_private_key_t coin_44;
-    hardened_private_child_from_private(&purpose_44, &coin_44, 0);
-
-    extended_private_key_t account_44;
-    hardened_private_child_from_private(&coin_44, &account_44, 0);
-
-    extended_private_key_t change_44;
-    normal_private_child_from_private(&account_44, &change_44, 0);
-
-    extended_private_key_t address_44;
-    normal_private_child_from_private(&change_44, &address_44, 0);
-
-    extended_public_key_t pub_44;
-    public_from_private(&address_44, &pub_44);
-
-    p2pkh_address_for_public_key(&pub_44, &all_addresses[0]); // Offset 0, 25 bytes
+    hardened_private_child_from_private(&master, &child1, 44);   // m/44'
+    hardened_private_child_from_private(&child1, &child2, 0);    // m/44'/0'
+    hardened_private_child_from_private(&child2, &child1, 0);    // m/44'/0'/0'
+    normal_private_child_from_private(&child1, &child2, 0);      // m/44'/0'/0'/0
+    normal_private_child_from_private(&child2, &child1, 0);      // m/44'/0'/0'/0/0
+    public_from_private(&child1, &pub);
+    p2pkh_address_for_public_key(&pub, &all_addresses[0]);       // 25 bytes
 
     // === 2. P2SH-P2WPKH (SegWit, starts with '3') - BIP49: m/49'/0'/0'/0/0 ===
-    extended_private_key_t purpose_49;
-    hardened_private_child_from_private(&master, &purpose_49, 49);
-
-    extended_private_key_t coin_49;
-    hardened_private_child_from_private(&purpose_49, &coin_49, 0);
-
-    extended_private_key_t account_49;
-    hardened_private_child_from_private(&coin_49, &account_49, 0);
-
-    extended_private_key_t change_49;
-    normal_private_child_from_private(&account_49, &change_49, 0);
-
-    extended_private_key_t address_49;
-    normal_private_child_from_private(&change_49, &address_49, 0);
-
-    extended_public_key_t pub_49;
-    public_from_private(&address_49, &pub_49);
-
-    p2shwpkh_address_for_public_key(&pub_49, &all_addresses[25]); // Offset 25, 25 bytes
+    hardened_private_child_from_private(&master, &child1, 49);   // m/49'
+    hardened_private_child_from_private(&child1, &child2, 0);    // m/49'/0'
+    hardened_private_child_from_private(&child2, &child1, 0);    // m/49'/0'/0'
+    normal_private_child_from_private(&child1, &child2, 0);      // m/49'/0'/0'/0
+    normal_private_child_from_private(&child2, &child1, 0);      // m/49'/0'/0'/0/0
+    public_from_private(&child1, &pub);
+    p2shwpkh_address_for_public_key(&pub, &all_addresses[25]);   // 25 bytes
 
     // === 3. P2WPKH (Native SegWit, starts with 'bc1') - BIP84: m/84'/0'/0'/0/0 ===
-    extended_private_key_t purpose_84;
-    hardened_private_child_from_private(&master, &purpose_84, 84);
-
-    extended_private_key_t coin_84;
-    hardened_private_child_from_private(&purpose_84, &coin_84, 0);
-
-    extended_private_key_t account_84;
-    hardened_private_child_from_private(&coin_84, &account_84, 0);
-
-    extended_private_key_t change_84;
-    normal_private_child_from_private(&account_84, &change_84, 0);
-
-    extended_private_key_t address_84;
-    normal_private_child_from_private(&change_84, &address_84, 0);
-
-    extended_public_key_t pub_84;
-    public_from_private(&address_84, &pub_84);
-
-    p2wpkh_address_for_public_key(&pub_84, &all_addresses[50]); // Offset 50, 21 bytes
+    hardened_private_child_from_private(&master, &child1, 84);   // m/84'
+    hardened_private_child_from_private(&child1, &child2, 0);    // m/84'/0'
+    hardened_private_child_from_private(&child2, &child1, 0);    // m/84'/0'/0'
+    normal_private_child_from_private(&child1, &child2, 0);      // m/84'/0'/0'/0
+    normal_private_child_from_private(&child2, &child1, 0);      // m/84'/0'/0'/0/0
+    public_from_private(&child1, &pub);
+    p2wpkh_address_for_public_key(&pub, &all_addresses[50]);     // 21 bytes
 }
 
 // Alternative: Derive multiple Bitcoin addresses (for checking multiple indices)
-void derive_btc_addresses_multiple_paths(uchar *seed, uchar *addresses, int num_addresses) {
+void derive_btc_addresses_multiple_paths(__generic uchar *seed, __generic uchar *addresses, int num_addresses) {
     extended_private_key_t master;
     new_master_from_seed(BITCOIN_MAINNET, seed, &master);
 
