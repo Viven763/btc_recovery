@@ -3,8 +3,8 @@ const fs = require('fs');
 // Читаем BIP39 словарь
 const words = fs.readFileSync('./cl/english.txt', 'utf8').trim().split('\n').map(w => w.trim());
 
-// Наша сид-фраза (22 известных слова, 23 и 24 неизвестны)
-const phrase = 'protect arctic pudding cabbage fiction hub extend board yard december service drip suffer fox error note mother online shield stomach engage click'.split(' ');
+// Наша сид-фраза (20 известных слов, последние 4 неизвестны)
+const phrase = 'switch over fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false'.split(' ');
 
 console.log('=== Word indices for BIP39 seed phrase ===\n');
 console.log('Known words:', phrase.length);
