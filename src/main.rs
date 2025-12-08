@@ -15,14 +15,14 @@ const WORK_SERVER_SECRET: &str = "15a172308d70dede515f9eecc78eaea9345b419581d036
 const DATABASE_PATH: &str = "btc-20200101-to-20250201.db";  // Bitcoin DB
 const BATCH_SIZE: usize = 5000000; // 1M per GPU batch
 
-// Известные 20 слов (4 неизвестных: позиции 20, 21, 22, 23)
-// Seed: switch oven fever flavor real jazz vague sugar throw steak yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
+// Известные 20 слов (4 неизвестных: позиции 5, 11, 17, 23)
+// Seed: switch real throw crush baby ??? oven jazz steak donate carbon ??? fever vague yellow three control ??? flavor sugar salad base false ???
 // Total combinations: 2048³ × 8 = 68,719,476,736
 const KNOWN_WORDS: [&str; 20] = [
-    "switch", "oven", "fever", "flavor", "real",
-    "jazz", "vague", "sugar", "throw", "steak",
-    "yellow", "salad", "crush", "donate", "three",
-    "base", "baby", "carbon", "control", "false"
+    "switch", "real", "throw", "crush", "baby",      // positions 0-4
+    "oven", "jazz", "steak", "donate", "carbon",     // positions 6-10
+    "fever", "vague", "yellow", "three", "control",  // positions 12-16
+    "flavor", "sugar", "salad", "base", "false"      // positions 18-22
 ];
 
 // === API структуры для работы с сервером ===
@@ -137,8 +137,8 @@ fn build_kernel_source() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    // Bitcoin Address Generator Kernel for 21 known words + 3 unknown
-    // Total combinations: 2048 × 2048 × 8 = 33,554,432
+    // Bitcoin Address Generator Kernel for 20 known words + 4 unknown (positions 5, 11, 17, 23)
+    // Total combinations: 2048³ × 8 = 68,719,476,736
     source.push_str(r#"
 __kernel void generate_btc_addresses(
     __global uchar *result_addresses,     // Output: 71 bytes per combo (25+25+21)
@@ -151,47 +151,47 @@ __kernel void generate_btc_addresses(
 
     ulong current_offset = start_offset + gid;
 
-    // For 4 unknown words (positions 20, 21, 22 and 23):
-    // - Word 20: 2048 variants (11 bits)
-    // - Word 21: 2048 variants (11 bits)
-    // - Word 22: 2048 variants (11 bits)
+    // For 4 unknown words (positions 5, 11, 17, 23):
+    // - Word 5: 2048 variants (11 bits)
+    // - Word 11: 2048 variants (11 bits)
+    // - Word 17: 2048 variants (11 bits)
     // - Word 23: calculated from checksum (3 bits entropy + 8 bits checksum)
     // Total: 2048³ × 8 = 68,719,476,736 combinations
 
     uint last_3_bits = (uint)(current_offset % 8UL);   // 0-7
     ulong temp = current_offset / 8UL;
-    uint w22_idx = (uint)(temp % 2048UL);              // 0-2047
+    uint w17_idx = (uint)(temp % 2048UL);              // 0-2047
     temp = temp / 2048UL;
-    uint w21_idx = (uint)(temp % 2048UL);              // 0-2047
-    uint w20_idx = (uint)((temp / 2048UL) % 2048UL);   // 0-2047
+    uint w11_idx = (uint)(temp % 2048UL);              // 0-2047
+    uint w5_idx = (uint)((temp / 2048UL) % 2048UL);    // 0-2047
 
-    // Build word indices (20 known + 3 unknown + 1 checksum)
-    // Seed: switch oven fever flavor real jazz vague sugar throw steak
-    //       yellow salad crush donate three base baby carbon control false ??? ??? ??? ???
+    // Build word indices (20 known + 4 unknown at positions 5, 11, 17, 23)
+    // Seed: switch real throw crush baby ??? oven jazz steak donate carbon ??? fever vague yellow three control ??? flavor sugar salad base false ???
     uint word_indices[24];
     word_indices[0] = 1761;   // switch
-    word_indices[1] = 1262;   // oven
-    word_indices[2] = 683;    // fever
-    word_indices[3] = 709;    // flavor
-    word_indices[4] = 1431;   // real
-    word_indices[5] = 955;    // jazz
-    word_indices[6] = 1925;   // vague
-    word_indices[7] = 1734;   // sugar
-    word_indices[8] = 1802;   // throw
-    word_indices[9] = 1704;   // steak
-    word_indices[10] = 2040;  // yellow
-    word_indices[11] = 1522;  // salad
-    word_indices[12] = 424;   // crush
-    word_indices[13] = 520;   // donate
-    word_indices[14] = 1800;  // three
-    word_indices[15] = 151;   // base
-    word_indices[16] = 136;   // baby
-    word_indices[17] = 275;   // carbon
-    word_indices[18] = 379;   // control
-    word_indices[19] = 658;   // false
-    word_indices[20] = w20_idx;  // UNKNOWN - iterate
-    word_indices[21] = w21_idx;  // UNKNOWN - iterate
-    word_indices[22] = w22_idx;  // UNKNOWN - iterate
+    word_indices[1] = 1431;   // real
+    word_indices[2] = 1802;   // throw
+    word_indices[3] = 424;    // crush
+    word_indices[4] = 136;    // baby
+    word_indices[5] = w5_idx; // UNKNOWN - iterate
+    word_indices[6] = 1262;   // oven
+    word_indices[7] = 955;    // jazz
+    word_indices[8] = 1704;   // steak
+    word_indices[9] = 520;    // donate
+    word_indices[10] = 275;   // carbon
+    word_indices[11] = w11_idx; // UNKNOWN - iterate
+    word_indices[12] = 683;   // fever
+    word_indices[13] = 1925;  // vague
+    word_indices[14] = 2040;  // yellow
+    word_indices[15] = 1800;  // three
+    word_indices[16] = 379;   // control
+    word_indices[17] = w17_idx; // UNKNOWN - iterate
+    word_indices[18] = 709;   // flavor
+    word_indices[19] = 1734;  // sugar
+    word_indices[20] = 1522;  // salad
+    word_indices[21] = 151;   // base
+    word_indices[22] = 658;   // false
+    // word_indices[23] calculated below from checksum
 
     // Calculate checksum word (word 23)
     // Pack 253 bits from first 23 words
@@ -222,7 +222,7 @@ __kernel void generate_btc_addresses(
 
     // Checksum = first 8 bits of hash
     uchar checksum = hash[0];
-    
+
     // Word 23 = (last_3_bits << 8) | checksum
     uint w23_idx = (last_3_bits << 8) | checksum;
     word_indices[23] = w23_idx;
@@ -510,18 +510,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Bitcoin BIP39 Recovery - GPU Worker ===\n");
 
     println!("Задача: 24-словная BIP39 мнемоника для Bitcoin");
-    println!("  Известно: первые 20 слов");
-    println!("  Неизвестно: последние 4 слова (позиции 20-23)");
+    println!("  Известно: 20 слов");
+    println!("  Неизвестно: 4 слова на позициях 5, 11, 17, 23");
     println!("  Checksum оптимизация: 2048³ x 8 = 68,719,476,736 комбинаций\n");
 
-    println!("Известные слова:");
-    for (i, word) in KNOWN_WORDS.iter().enumerate() {
-        print!("  {:2}: {:<10}", i, word);
-        if (i + 1) % 5 == 0 {
-            println!();
-        }
-    }
-    println!("\n  20-23: ???\n");
+    println!("Структура мнемоники:");
+    println!("  0-4:   switch real throw crush baby");
+    println!("  5:     ??? (unknown)");
+    println!("  6-10:  oven jazz steak donate carbon");
+    println!("  11:    ??? (unknown)");
+    println!("  12-16: fever vague yellow three control");
+    println!("  17:    ??? (unknown)");
+    println!("  18-22: flavor sugar salad base false");
+    println!("  23:    ??? (checksum)\n");
 
     println!("📦 Загрузка базы данных в RAM...");
     let db = Database::load(DATABASE_PATH)?;
